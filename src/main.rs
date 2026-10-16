@@ -267,12 +267,25 @@ fn main() {
 
     println!("TUN interface configured successfully with IP {local_ip}. Running main loop...");
 
-    // 8. Main event loop keeping Tox core active and responsive
+  // 8. Main event loop keeping Tox core active and responsive
     loop {
+        // Safely send any pending TUN packets on the main thread
+        while let Ok(pkt) = net_iface.rx_channel.try_recv() {
+            let mut err = 0;
+            unsafe {
+                tox_core::tox_friend_send_lossy_packet(
+                    tox.ptr,
+                    pkt.friend_number,
+                    pkt.data.as_ptr(),
+                    pkt.data.len(),
+                    &mut err,
+                );
+            }
+        }
+
         unsafe {
             tox_core::tox_iterate(tox.ptr);
             let interval = tox_core::tox_iteration_interval(tox.ptr);
             std::thread::sleep(std::time::Duration::from_millis(interval as u64));
         }
     }
-}
