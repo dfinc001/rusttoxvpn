@@ -8,6 +8,7 @@ use rand::seq::SliceRandom;
 use std::env;
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
+use std::os::unix::io::RawFd;
 
 // Small word list for auto-generating 3-word passwords (e.g., light-sky-dog)
 const WORD_LIST: &[&str] = &[
@@ -25,10 +26,11 @@ fn generate_default_password() -> String {
     format!("{w1}-{w2}-{w3}")
 }
 
-// Global shared state for callbacks to access routing and passwords
+// Global shared state for callbacks to access routing, passwords, and file descriptors safely
 static mut SERVER_PASSWORD: String = String::new();
 static mut GLOBAL_ROUTES: Option<Arc<Mutex<Vec<interface::Route>>>> = None;
 static mut IS_SERVER_NODE: bool = false;
+static mut TUN_FD: RawFd = -1;
 
 /// C-compatible callback function triggered by libtoxcore when an incoming friend request arrives.
 unsafe extern "C" fn on_friend_request(
@@ -80,8 +82,9 @@ unsafe extern "C" fn on_connection_status(
         0 => {
             println!("\n[-] Friend #{friend_number} went OFFLINE.");
             if let Some(ref routes_arc) = GLOBAL_ROUTES {
-                let mut routes = routes_arc.lock().unwrap();
-                routes.retain(|r| r.friend_number != friend_number as i32);
+                if let Ok(mut routes) = routes_arc.lock() {
+                    routes.retain(|r| r.friend_number != friend_number as i32);
+                }
             }
         }
         1 | 2 => {
@@ -100,20 +103,20 @@ unsafe extern "C" fn on_connection_status(
             println!(" - Remote Tunnel IP    : {}", peer_ip);
             println!("============================================================\n");
 
-            // Populate point-to-point route table upon connection
+            // Populate point-to-point route table safely
             if let Some(ref routes_arc) = GLOBAL_ROUTES {
-                let mut routes = routes_arc.lock().unwrap();
-
-                if !routes.iter().any(|r| r.friend_number == friend_number as i32) {
-                    routes.push(interface::Route {
-                        network: peer_ip,
-                        mask: Ipv4Addr::new(255, 255, 255, 255),
-                        maskbits: 32,
-                        friend_number: friend_number as i32,
-                        netmode: NetMode::Tun,
-                        pubkey: [0u8; 32],
-                    });
-                    println!("[*] Added dynamic VPN routing rule for {}", peer_ip);
+                if let Ok(mut routes) = routes_arc.lock() {
+                    if !routes.iter().any(|r| r.friend_number == friend_number as i32) {
+                        routes.push(interface::Route {
+                            network: peer_ip,
+                            mask: Ipv4Addr::new(255, 255, 255, 255),
+                            maskbits: 32,
+                            friend_number: friend_number as i32,
+                            netmode: NetMode::Tun,
+                            pubkey: [0u8; 32],
+                        });
+                        println!("[*] Added dynamic VPN routing rule for {}", peer_ip);
+                    }
                 }
             }
         }
@@ -127,14 +130,13 @@ unsafe extern "C" fn on_lossy_packet(
     _friend_number: u32,
     data: *const u8,
     length: usize,
-    user_data: *mut std::ffi::c_void,
+    _user_data: *mut std::ffi::c_void,
 ) {
-    if length > 1 && data.read() == 200 {
+    if length > 1 && !data.is_null() && data.read() == 200 {
         let packet_slice = std::slice::from_raw_parts(data.add(1), length - 1);
-        //if !user_data.is_null() {
-          //  let net_iface = &*(user_data as *const NetworkInterface);
-            //net_iface.send_pi_packet_to_kernel(packet_slice);
-       // }
+        if TUN_FD >= 0 {
+            libc::write(TUN_FD, packet_slice.as_ptr() as *const _, packet_slice.len());
+        }
     }
 }
 
@@ -198,10 +200,11 @@ fn main() {
     let local_ip = if is_server { "192.168.222.1" } else { "192.168.222.2" };
     net_iface.configure(local_ip, NetMode::Tun);
 
-    // 6. Setup global state for callbacks
+    // 6. Setup global state and callbacks safely
     unsafe {
         IS_SERVER_NODE = is_server;
         GLOBAL_ROUTES = Some(Arc::clone(&net_iface.routes));
+        TUN_FD = net_iface.fd();
         
         if is_server {
             SERVER_PASSWORD = final_password.clone();
@@ -210,7 +213,8 @@ fn main() {
         tox_core::tox_callback_friend_connection_status(tox.ptr, Some(on_connection_status));
         tox_core::tox_callback_friend_lossy_packet(tox.ptr, Some(on_lossy_packet));
     }
-// 7. Print startup instructions & handle client-side friend connection request
+
+    // 7. Print startup instructions & handle client-side friend connection request
     if is_server {
         let public_ip = bootstrap::get_public_ip();
 
