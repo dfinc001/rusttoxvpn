@@ -131,10 +131,10 @@ unsafe extern "C" fn on_lossy_packet(
 ) {
     if length > 1 && data.read() == 200 {
         let packet_slice = std::slice::from_raw_parts(data.add(1), length - 1);
-        if !user_data.is_null() {
-            let net_iface = &*(user_data as *const NetworkInterface);
-            net_iface.send_pi_packet_to_kernel(packet_slice);
-        }
+        //if !user_data.is_null() {
+          //  let net_iface = &*(user_data as *const NetworkInterface);
+            //net_iface.send_pi_packet_to_kernel(packet_slice);
+       // }
     }
 }
 
