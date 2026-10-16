@@ -23,14 +23,13 @@ fn main() {
     // 3. Initialize network interface, passing the raw Tox pointer
     let mut net_iface = NetworkInterface::new(tox.ptr);
 
-    // 4. Configure TUN interface with dynamic local IP (e.g., 192.168.222.154 for client)
-    // You can make this command-line argument driven or dynamic as needed.
+    // 4. Configure TUN interface with dynamic local IP
     let local_ip = "192.168.222.154"; 
     net_iface.configure(local_ip, NetMode::Tun);
 
     println!("TUN interface configured successfully with IP {local_ip}. Running main loop...");
 
-   // 5. Main event loop driving Tox core and keeping VPN active
+    // 5. Main event loop driving Tox core and keeping VPN active
     loop {
         unsafe {
             tox_core::tox_iterate(tox.ptr);
@@ -38,3 +37,4 @@ fn main() {
             std::thread::sleep(std::time::Duration::from_millis(interval as u64));
         }
     }
+}
