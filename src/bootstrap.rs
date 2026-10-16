@@ -94,3 +94,34 @@ fn parse_first_node(json: &str) -> Option<NodeInfo> {
 
     Some(NodeInfo { ipv4, port, public_key })
 }
+/// Queries public IP APIs to discover the container's external public-facing IP address
+pub fn get_public_ip() -> String {
+    let output = Command::new("curl")
+        .args(["-s", "https://api.ipify.org"])
+        .output();
+
+    if let Ok(res) = output {
+        if res.status.success() {
+            let ip = String::from_utf8_lossy(&res.stdout).trim().to_string();
+            if !ip.is_empty() {
+                return ip;
+            }
+        }
+    }
+
+    // Fallback service if ipify is unreachable
+    let fallback = Command::new("curl")
+        .args(["-s", "https://icanhazip.com"])
+        .output();
+
+    if let Ok(res) = fallback {
+        if res.status.success() {
+            let ip = String::from_utf8_lossy(&res.stdout).trim().to_string();
+            if !ip.is_empty() {
+                return ip;
+            }
+        }
+    }
+
+    "127.0.0.1 (Local/NAT)".to_string()
+}
