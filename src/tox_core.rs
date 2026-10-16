@@ -42,7 +42,48 @@ extern "C" {
             ),
         >,
     );
+
+    // Connection status & lossy packet forwarding FFI bindings
+    pub fn tox_callback_friend_connection_status(
+        tox: *mut c_void,
+        callback: ToxFriendConnectionStatusCb,
+    );
+
+    pub fn tox_callback_friend_lossy_packet(
+        tox: *mut c_void,
+        callback: ToxFriendLossyPacketCb,
+    );
+
+    pub fn tox_friend_send_lossy_packet(
+        tox: *mut c_void,
+        friend_number: u32,
+        data: *const u8,
+        length: usize,
+        error: *mut u32,
+    ) -> bool;
 }
+
+// ============================================================================
+// Callback Type Definitions for FFI Signatures
+// ============================================================================
+pub type ToxFriendConnectionStatusCb = Option<
+    unsafe extern "C" fn(
+        tox: *mut c_void,
+        friend_number: u32,
+        connection_status: u32,
+        user_data: *mut c_void,
+    ),
+>;
+
+pub type ToxFriendLossyPacketCb = Option<
+    unsafe extern "C" fn(
+        tox: *mut c_void,
+        friend_number: u32,
+        data: *const u8,
+        length: usize,
+        user_data: *mut c_void,
+    ),
+>;
 
 // ============================================================================
 // Tox Options Configuration Structure
