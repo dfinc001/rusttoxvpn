@@ -9,7 +9,12 @@ use std::ffi::c_void;
 #[link(name = "sodium")]
 extern "C" {
     // Core lifecycle functions
-    pub fn tox_new(options: *const ToxOptions, error: *mut u32) -> *mut c_void;
+    pub fn tox_options_new(error: *mut u32) -> *mut c_void;
+    pub fn tox_options_free(options: *mut c_void);
+    pub fn tox_options_set_ipv6_enabled(options: *mut c_void, enabled: bool);
+    pub fn tox_options_set_udp_enabled(options: *mut c_void, enabled: bool);
+    pub fn tox_options_set_tcp_port(options: *mut c_void, port: u16);
+    pub fn tox_new(options: *const c_void, error: *mut u32) -> *mut c_void;
     pub fn tox_kill(tox: *mut c_void);
     pub fn tox_self_get_address(tox: *const c_void, address: *mut u8);
     pub fn tox_iteration_interval(tox: *const c_void) -> u32;
@@ -137,12 +142,22 @@ pub struct ToxInstance {
 impl ToxInstance {
     /// Initializes a new live Tox core instance with default options.
     pub fn new() -> Result<Self, String> {
-        let options = ToxOptions::default();
+        let mut options_error = 0;
+        let options = unsafe { tox_options_new(&mut options_error) };
+
+        if options.is_null() {
+            return Err(format!("tox_options_new failed: {options_error}"));
+        }
+
+        unsafe {
+            tox_options_set_ipv6_enabled(options, true);
+            tox_options_set_udp_enabled(options, true);
+            tox_options_set_tcp_port(options, 33445);
+        }
+
         let mut err = 0;
-        
-        // FFI calls are marked `unsafe` because Rust cannot verify the memory safety 
-        // or correctness of arbitrary external C functions.
-        let ptr = unsafe { tox_new(&options, &mut err) };
+        let ptr = unsafe { tox_new(options, &mut err) };
+        unsafe { tox_options_free(options) };
 
         if ptr.is_null() {
             return Err(format!("Failed to create Tox instance, error code: {err}"));
