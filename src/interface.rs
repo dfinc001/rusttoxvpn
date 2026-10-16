@@ -2,22 +2,9 @@
 use std::net::Ipv4Addr;
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
-use crate::tox_core;
+use std::sync::mpsc::{self, Receiver, Sender};
 
-/// Size of a Tox public key in bytes
 pub const TOX_PUBLIC_KEY_SIZE: usize = 32;
-
-/// Wrapper to allow sending the raw FFI Tox pointer across thread boundaries safely
-struct SendPtr(*mut std::ffi::c_void);
-unsafe impl Send for SendPtr {}
-
-/// Linux TUN Packet Information (PI) header structure.
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct tun_pi {
-    pub flags: u16,
-    pub proto: u16,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetMode {
@@ -35,27 +22,34 @@ pub struct Route {
     pub pubkey: [u8; TOX_PUBLIC_KEY_SIZE],
 }
 
+pub struct OutgoingPacket {
+    pub friend_number: u32,
+    pub data: Vec<u8>,
+}
+
 pub struct NetworkInterface {
     pub routes: Arc<Mutex<Vec<Route>>>,
-    pub fd: RawFd, // Public so main.rs can access it for global callback file descriptor tracking
-    my_tox: *mut std::ffi::c_void,
+    pub fd: RawFd,
+    pub rx_channel: Receiver<OutgoingPacket>,
+    tx_channel: Sender<OutgoingPacket>,
     interface_index: i32,
-    mymac: [u8; 6],
 }
 
 impl NetworkInterface {
-    pub fn new(my_tox: *mut std::ffi::c_void) -> Self {
+    pub fn new(_my_tox: *mut std::ffi::c_void) -> Self {
         let fd = unsafe { libc::open(b"/dev/net/tun\0".as_ptr() as *const _, libc::O_RDWR) };
         if fd < 0 {
             eprintln!("Unable to open /dev/net/tun");
         }
 
+        let (tx_channel, rx_channel) = mpsc::channel();
+
         Self {
             routes: Arc::new(Mutex::new(Vec::new())),
             fd,
-            my_tox,
+            rx_channel,
+            tx_channel,
             interface_index: 0,
-            mymac: [0u8; 6],
         }
     }
 
@@ -68,7 +62,7 @@ impl NetworkInterface {
         let mut ifr: libc::ifreq = unsafe { std::mem::zeroed() };
         ifr.ifr_ifru.ifru_flags = match netmode {
             NetMode::Tap => libc::IFF_TAP as i16,
-            NetMode::Tun => (libc::IFF_TUN | libc::IFF_NO_PI) as i16, // Disable PI header for simpler raw IP handling
+            NetMode::Tun => (libc::IFF_TUN | libc::IFF_NO_PI) as i16,
         };
 
         let name = b"tox_master0\0";
@@ -130,14 +124,14 @@ impl NetworkInterface {
 
         let fd_clone = self.fd;
         let routes_clone = Arc::clone(&self.routes);
-        let tox_ptr = SendPtr(self.my_tox);
+        let tx_clone = self.tx_channel.clone();
 
         std::thread::spawn(move || {
-            Self::reader_loop(fd_clone, routes_clone, tox_ptr);
+            Self::reader_loop(fd_clone, routes_clone, tx_clone);
         });
     }
 
-    fn reader_loop(fd: RawFd, routes: Arc<Mutex<Vec<Route>>>, tox_ptr: SendPtr) {
+    fn reader_loop(fd: RawFd, routes: Arc<Mutex<Vec<Route>>>, tx: Sender<OutgoingPacket>) {
         let mut readbuffer = [0u8; 1500];
         loop {
             let size = unsafe {
@@ -147,7 +141,6 @@ impl NetworkInterface {
                 break;
             } else if size > 20 {
                 let packet_len = size as usize;
-                // With IFF_NO_PI, the packet starts immediately with the IPv4 header
                 let dst_ip_bytes = &readbuffer[16..20];
                 let dst_ip = Ipv4Addr::new(
                     dst_ip_bytes[0],
@@ -166,58 +159,16 @@ impl NetworkInterface {
                 };
 
                 if let Some(route) = matched_route {
-                    Self::forward_packet_static(tox_ptr.0, &route, &readbuffer[..packet_len], route.netmode);
+                    let mut buffer = vec![0u8; packet_len + 1];
+                    buffer[0] = 200;
+                    buffer[1..].copy_from_slice(&readbuffer[..packet_len]);
+
+                    let _ = tx.send(OutgoingPacket {
+                        friend_number: route.friend_number as u32,
+                        data: buffer,
+                    });
                 }
             }
-        }
-    }
-
-    pub fn pubkey_to_mac(pubkey: &[u8], mac: &mut [u8]) {
-        if pubkey.len() >= 6 && mac.len() >= 6 {
-            mac[..6].copy_from_slice(&pubkey[..6]);
-            mac[0] |= 2;
-            mac[0] &= 254;
-        }
-    }
-
-    pub fn add_peer_route(&mut self, peer: Ipv4Addr, friend_number: i32, peer_netmode: NetMode, pubkey: &[u8]) {
-        let mut key = [0u8; TOX_PUBLIC_KEY_SIZE];
-        if pubkey.len() == TOX_PUBLIC_KEY_SIZE {
-            key.copy_from_slice(pubkey);
-        }
-
-        let route = Route {
-            network: peer,
-            mask: Ipv4Addr::new(255, 255, 255, 255),
-            maskbits: 32,
-            friend_number,
-            netmode: peer_netmode,
-            pubkey: key,
-        };
-
-        let mut routes = self.routes.lock().unwrap();
-        routes.push(route);
-    }
-
-    fn forward_packet_static(tox: *mut std::ffi::c_void, route: &Route, readbuffer: &[u8], _netmode: NetMode) {
-        // Prefix with VPN packet identifier code (200)
-        let mut buffer = vec![0u8; readbuffer.len() + 1];
-        buffer[0] = 200;
-        buffer[1..].copy_from_slice(readbuffer);
-
-        let mut err = 0;
-        let success = unsafe {
-            tox_core::tox_friend_send_lossy_packet(
-                tox,
-                route.friend_number as u32,
-                buffer.as_ptr(),
-                buffer.len(),
-                &mut err,
-            )
-        };
-
-        if !success {
-            eprintln!("Failed to send lossy packet to friend {}, error code: {err}", route.friend_number);
         }
     }
 
