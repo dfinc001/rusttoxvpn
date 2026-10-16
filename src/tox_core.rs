@@ -121,6 +121,7 @@ impl Default for ToxOptions {
             let mut opts: ToxOptions = std::mem::zeroed();
             opts.ipv6_enabled = true;
             opts.udp_enabled = true;
+            opts.tcp_port = 33445; // Enable TCP listener fallback for container NAT traversal
             opts
         }
     }
