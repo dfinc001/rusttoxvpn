@@ -39,26 +39,33 @@ unsafe extern "C" fn on_friend_request(
     _user_data: *mut std::ffi::c_void,
 ) {
     let message_slice = std::slice::from_raw_parts(message, length);
-    let client_password = String::from_utf8_lossy(message_slice);
+    let request_payload = String::from_utf8_lossy(message_slice);
+
+    // Parse payload formatted as "password:client_ip"
+    let parts: Vec<&str> = request_payload.split(':').collect();
+    let client_password = parts.get(0).unwrap_or(&"");
+    let client_ip = parts.get(1).unwrap_or(&"192.168.222.2");
 
     let mut pubkey_array = [0u8; 32];
     std::ptr::copy_nonoverlapping(public_key, pubkey_array.as_mut_ptr(), 32);
     let pubkey_hex = hex::encode(pubkey_array);
 
-    println!("Received friend request from public key: {}", pubkey_hex);
-    println!("Provided password: '{}'", client_password);
+    println!("\n[+] Received incoming connection request!");
+    println!("    - Client Public Key : {}", pubkey_hex);
+    println!("    - Client Tunnel IP  : {}", client_ip);
+    println!("    - Provided Password : '{}'", client_password);
 
-    if client_password == SERVER_PASSWORD {
-        println!("Password verified! Auto-accepting connection...");
+    if *client_password == SERVER_PASSWORD {
+        println!("    - Authentication    : SUCCESSFUL. Auto-accepting peer...");
         let mut err = 0;
         let friend_number = tox_core::tox_friend_add_norequest(tox, public_key, &mut err);
         if err != 0 {
-            eprintln!("Failed to accept friend, error code: {err}");
+            eprintln!("[-] Failed to accept friend, error code: {err}");
         } else {
-            println!("Successfully accepted peer as friend number: {friend_number}");
+            println!("    - Assigned Friend ID: #{friend_number}");
         }
     } else {
-        eprintln!("Password mismatch! Rejecting connection request.");
+        eprintln!("    - Authentication    : FAILED (Password mismatch). Rejecting request.");
     }
 }
 
@@ -71,7 +78,7 @@ unsafe extern "C" fn on_connection_status(
 ) {
     match connection_status {
         0 => {
-            println!("[-] Friend {friend_number} went OFFLINE.");
+            println!("\n[-] Friend #{friend_number} went OFFLINE.");
             if let Some(ref routes_arc) = GLOBAL_ROUTES {
                 let mut routes = routes_arc.lock().unwrap();
                 routes.retain(|r| r.friend_number != friend_number as i32);
@@ -79,17 +86,23 @@ unsafe extern "C" fn on_connection_status(
         }
         1 | 2 => {
             let conn_type = if connection_status == 1 { "TCP" } else { "UDP" };
-            println!("[+] Friend {friend_number} connected via {conn_type}!");
+            let peer_ip = if IS_SERVER_NODE {
+                Ipv4Addr::new(192, 168, 222, 2)
+            } else {
+                Ipv4Addr::new(192, 168, 222, 1)
+            };
+
+            println!("\n============================================================");
+            println!(" PEER CONNECTION ESTABLISHED ({conn_type})");
+            println!("============================================================");
+            println!(" - Connected Friend ID : #{}", friend_number);
+            println!(" - Protocol            : {}", conn_type);
+            println!(" - Remote Tunnel IP    : {}", peer_ip);
+            println!("============================================================\n");
 
             // Populate point-to-point route table upon connection
             if let Some(ref routes_arc) = GLOBAL_ROUTES {
                 let mut routes = routes_arc.lock().unwrap();
-                
-                let peer_ip = if IS_SERVER_NODE {
-                    Ipv4Addr::new(192, 168, 222, 2)
-                } else {
-                    Ipv4Addr::new(192, 168, 222, 1)
-                };
 
                 if !routes.iter().any(|r| r.friend_number == friend_number as i32) {
                     routes.push(interface::Route {
@@ -100,7 +113,7 @@ unsafe extern "C" fn on_connection_status(
                         netmode: NetMode::Tun,
                         pubkey: [0u8; 32],
                     });
-                    println!("[*] Added VPN route to {} -> Friend {friend_number}", peer_ip);
+                    println!("[*] Added dynamic VPN routing rule for {}", peer_ip);
                 }
             }
         }
@@ -210,13 +223,19 @@ fn main() {
         println!("   cargo run -- -id {} -p {}", tox_id, final_password);
         println!("============================================================\n");
     } else {
-        println!("ToxVPN CLIENT MODE ACTIVE");
+        println!("\n============================================================");
+        println!(" ToxVPN CLIENT MODE ACTIVE");
+        println!("============================================================");
+        println!(" Local Tunnel IP: {}", local_ip);
         if let Some(ref target_id_hex) = client_target_id {
-            println!("Connecting to Server ID: {}", target_id_hex);
-            println!("Using Password         : {}", final_password);
+            println!(" Target Server ID: {}", target_id_hex);
+            println!(" Using Password  : {}", final_password);
 
             let target_bytes = hex::decode(target_id_hex).expect("Invalid hex string for server ID");
-            let pass_bytes = final_password.as_bytes();
+            
+            // Format request message as "password:client_ip" so server can inspect client config
+            let request_message = format!("{}:{}", final_password, local_ip);
+            let pass_bytes = request_message.as_bytes();
 
             let mut err = 0;
             let friend_number = unsafe {
@@ -230,13 +249,14 @@ fn main() {
             };
 
             if err != 0 {
-                eprintln!("Failed to add friend / send request, error code: {err}");
+                eprintln!("[-] Failed to send friend request, error code: {err}");
             } else {
-                println!("Friend request sent to server! Friend index: {friend_number}");
+                println!("[+] Friend request sent to server with IP info! Assigned index: #{friend_number}");
             }
         } else {
-            eprintln!("Warning: No server ID specified. Use -id <toxid>");
+            eprintln!("[-] Warning: No server ID specified. Use -id <toxid>");
         }
+        println!("============================================================\n");
     }
 
     println!("TUN interface configured successfully with IP {local_ip}. Running main loop...");
