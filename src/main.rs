@@ -30,9 +30,11 @@ fn main() {
 
     println!("TUN interface configured successfully with IP {local_ip}. Running main loop...");
 
-    // 5. Main iteration loop keeping Tox core alive
+   // 5. Main event loop driving Tox core and keeping VPN active
     loop {
-        // We will add tox_iterate and interval sleeping here next!
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        unsafe {
+            tox_core::tox_iterate(tox.ptr);
+            let interval = tox_core::tox_iteration_interval(tox.ptr);
+            std::thread::sleep(std::time::Duration::from_millis(interval as u64));
+        }
     }
-}
