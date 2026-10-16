@@ -58,7 +58,7 @@ fn main() {
         println!("Server Tox ID: {}", mock_toxid);
         println!("--------------------------------------------------");
     } else {
-        println!("Connecting to Server with Tox ID: {}", client_toxid.as_unwrap());
+        println!("Connecting to Server with Tox ID: {}", client_toxid.unwrap());
     }
 
     // Initialize system routing tables
@@ -67,8 +67,7 @@ fn main() {
     // Initialize the virtual network interface
     println!("Initializing virtual network interface...");
     let mut interface = interface::NetworkInterface::new(std::ptr::null_mut());
-    // For now, configure with local IP (peer IP configuration will be wired next)
-    interface.configure(&local_ip, "192.168.222.254", interface::NetMode::Tun);
+    interface.configure(&local_ip, interface::NetMode::Tun);
 
     // Set up graceful shutdown signal handler (Ctrl+C)
     let keep_running = Arc::new(AtomicBool::new(true));
