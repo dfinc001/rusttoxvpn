@@ -61,8 +61,8 @@ impl NetworkInterface {
         }
     }
 
-    /// Configures the TUN/TAP interface via ioctl syscalls, sets MAC addresses, MTU, 
-    /// local/peer IP addresses, brings the interface up, and launches the background packet reader loop.
+    /// Configures the TUN/TAP interface dynamically via ioctl syscalls, sets MTU, 
+    /// local IP address, subnet netmask, brings the interface up, and launches the background reader loop.
     pub fn configure(&mut self, ip_in: &str, netmode: NetMode) {
         if self.fd < 0 {
             eprintln!("TUN file descriptor is invalid.");
@@ -121,15 +121,17 @@ impl NetworkInterface {
             libc::ioctl(tun_sock, libc::SIOCSIFMTU as _, &mut ifr);
         }
 
-        // Parse and set the local interface IPv4 address
+        // Parse and set the dynamic local interface IPv4 address
         let ip_addr: Ipv4Addr = match ip_in.parse() {
             Ok(ip) => ip,
-            Err(_) => Ipv4Addr::new(10, 0, 0, 1),
+            Err(_) => Ipv4Addr::new(192, 168, 222, 1),
         };
 
         unsafe {
             let mut addr: libc::sockaddr_in = std::mem::zeroed();
             addr.sin_family = libc::AF_INET as u16;
+
+            // Set local IP address
             addr.sin_addr.s_addr = u32::from(ip_addr).to_be();
             std::ptr::copy_nonoverlapping(
                 &addr as *const _ as *const u8,
@@ -138,15 +140,15 @@ impl NetworkInterface {
             );
             libc::ioctl(tun_sock, libc::SIOCSIFADDR as _, &mut ifr);
 
-            // Set the peer/destination IPv4 address for point-to-point routing
-            let dst_ip = Ipv4Addr::new(10, 123, 123, 123);
-            addr.sin_addr.s_addr = u32::from(dst_ip).to_be();
+            // Set dynamic subnet netmask (255.255.255.0 for the /24 VPN subnet)
+            let netmask = Ipv4Addr::new(255, 255, 255, 0);
+            addr.sin_addr.s_addr = u32::from(netmask).to_be();
             std::ptr::copy_nonoverlapping(
                 &addr as *const _ as *const u8,
-                &mut ifr.ifr_ifru.ifru_dstaddr as *mut _ as *mut u8,
+                &mut ifr.ifr_ifru.ifru_netmask as *mut _ as *mut u8,
                 std::mem::size_of::<libc::sockaddr_in>(),
             );
-            libc::ioctl(tun_sock, libc::SIOCSIFDSTADDR as _, &mut ifr);
+            libc::ioctl(tun_sock, libc::SIOCSIFNETMASK as _, &mut ifr);
 
             // Bring the interface UP and mark it RUNNING
             libc::ioctl(tun_sock, libc::SIOCGIFFLAGS as _, &mut ifr);
