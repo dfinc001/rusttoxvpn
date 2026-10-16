@@ -1,4 +1,5 @@
 use std::fs;
+use std::io;
 use std::os::unix::io::RawFd;
 use std::path::Path;
 
@@ -28,7 +29,7 @@ impl SocketListener {
         Ok(Self {
             socket_fd,
             connections: Vec::new(),
-            interface,
+            interface: interface as *mut NetworkInterface,
             #[cfg(feature = "zmq")]
             zmq_broadcast: std::ptr::null_mut(),
         })
@@ -80,7 +81,7 @@ impl SocketListener {
         Ok(Self {
             socket_fd,
             connections: Vec::new(),
-            interface,
+            interface: interface as *mut NetworkInterface,
             #[cfg(feature = "zmq")]
             zmq_broadcast: std::ptr::null_mut(),
         })
