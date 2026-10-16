@@ -3,9 +3,14 @@ use std::io;
 use std::net::Ipv4Addr;
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
+use crate::tox_core;
 
 /// Size of a Tox public key in bytes (standard Ed25519 key size used by Tox core)
 pub const TOX_PUBLIC_KEY_SIZE: usize = 32;
+
+/// Wrapper to allow sending the raw FFI Tox pointer across thread boundaries safely
+struct SendPtr(*mut std::ffi::c_void);
+unsafe impl Send for SendPtr {}
 
 /// Linux TUN Packet Information (PI) header structure.
 /// Prefixed to packets read/written on TUN devices unless IFF_NO_PI is set.
@@ -62,7 +67,7 @@ impl NetworkInterface {
         }
     }
 
-    /// Configures the TUN/TAP interface dynamically via ioctl syscalls, sets MTU, 
+    /// Configures the TUN/TAP interface dynamically via ioctl syscalls, sets MTU,
     /// local IP address, subnet netmask, brings the interface up, and launches the background reader loop.
     pub fn configure(&mut self, ip_in: &str, netmode: NetMode) {
         if self.fd < 0 {
@@ -72,7 +77,7 @@ impl NetworkInterface {
 
         // Initialize the network interface request structure (`ifreq`)
         let mut ifr: libc::ifreq = unsafe { std::mem::zeroed() };
-        
+
         ifr.ifr_ifru.ifru_flags = match netmode {
             NetMode::Tap => libc::IFF_TAP as i16,
             NetMode::Tun => libc::IFF_TUN as i16,
@@ -166,15 +171,16 @@ impl NetworkInterface {
         // Clone handles for the background reader thread
         let fd_clone = self.fd;
         let routes_clone = Arc::clone(&self.routes);
+        let tox_ptr = SendPtr(self.my_tox);
 
         // Spawn a background thread to continuously intercept packets coming out of the kernel stack
         std::thread::spawn(move || {
-            Self::reader_loop(fd_clone, routes_clone);
+            Self::reader_loop(fd_clone, routes_clone, tox_ptr);
         });
     }
 
     /// Background worker loop that blocks on `libc::read` to capture outbound kernel packets from the TUN device.
-    fn reader_loop(fd: RawFd, routes: Arc<Mutex<Vec<Route>>>) {
+    fn reader_loop(fd: RawFd, routes: Arc<Mutex<Vec<Route>>>, tox_ptr: SendPtr) {
         let mut readbuffer = [0u8; 1500];
         loop {
             let size = unsafe {
@@ -214,11 +220,8 @@ impl NetworkInterface {
                     };
 
                     if let Some(route) = matched_route {
-                        // Forward packet to the specific peer route
-                        Self::forward_packet_static(&route, &readbuffer[..packet_len], route.netmode);
-                    } else {
-                        // No route found yet for this destination IP
-                        // println!("No route for destination IP: {}", dst_ip);
+                        // Forward packet to the specific peer route via Tox
+                        Self::forward_packet_static(tox_ptr.0, &route, &readbuffer[..packet_len], route.netmode);
                     }
                 }
             }
@@ -285,11 +288,11 @@ impl NetworkInterface {
 
     /// Encapsulates and forwards a packet to a specific peer via Tox custom lossy network packets
     pub fn forward_packet(&self, route: &Route, readbuffer: &[u8], netmode: NetMode) {
-        Self::forward_packet_static(route, readbuffer, netmode);
+        Self::forward_packet_static(self.my_tox, route, readbuffer, netmode);
     }
 
-    /// Static helper for forwarding packets (accessible by background threads without self reference)
-    fn forward_packet_static(route: &Route, readbuffer: &[u8], netmode: NetMode) {
+    /// Static helper for forwarding packets via Tox lossy packets (accessible by background threads)
+    fn forward_packet_static(tox: *mut std::ffi::c_void, route: &Route, readbuffer: &[u8], netmode: NetMode) {
         let mut buffer = vec![0u8; readbuffer.len() + 1];
         buffer[0] = 200; // Tox-specific VPN packet prefix identifier code
 
@@ -311,8 +314,22 @@ impl NetworkInterface {
             readbuffer.len()
         };
 
-        // TODO: Transmit packet via Tox custom lossy packet API using route.friend_number
-        let _ = (netmode, payload_size);
+        // Transmit packet via Tox custom lossy packet API using route.friend_number
+        let mut err = 0;
+        let success = unsafe {
+            tox_core::tox_friend_send_lossy_packet(
+                tox,
+                route.friend_number as u32,
+                buffer.as_ptr(),
+                payload_size + 1,
+                &mut err,
+            )
+        };
+
+        if !success {
+            eprintln!("Failed to send lossy packet to friend {}, error code: {err}", route.friend_number);
+        }
+        let _ = netmode;
     }
 
     /// Broadcasts a packet to all connected TAP peers
@@ -320,7 +337,7 @@ impl NetworkInterface {
         let routes = self.routes.lock().unwrap();
         for route in &*routes {
             if route.netmode == NetMode::Tap {
-                Self::forward_packet_static(route, readbuffer, NetMode::Tap);
+                Self::forward_packet_static(self.my_tox, route, readbuffer, NetMode::Tap);
             }
         }
     }
