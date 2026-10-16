@@ -1,7 +1,7 @@
 mod tox_core;
 mod interface;
 
-import std::env;
+use std::env;
 use interface::{NetworkInterface, NetMode};
 use tox_core::ToxInstance;
 use rand::seq::SliceRandom;
