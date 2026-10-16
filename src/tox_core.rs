@@ -15,6 +15,15 @@ extern "C" {
     pub fn tox_iteration_interval(tox: *const c_void) -> u32;
     pub fn tox_iterate(tox: *mut c_void);
 
+    // DHT Bootstrap function
+    pub fn tox_bootstrap(
+        tox: *mut c_void,
+        host: *const i8,
+        port: u16,
+        public_key: *const u8,
+        error: *mut u32,
+    ) -> bool;
+
     // Friend management & request functions
     pub fn tox_friend_add(
         tox: *mut c_void,
