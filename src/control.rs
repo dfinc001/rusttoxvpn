@@ -3,6 +3,9 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::io::FromRawFd;
 use std::os::unix::io::RawFd;
 
+// Import the real Tox and ToxVpnCore from the toxvpn module
+use crate::toxvpn::{Tox, ToxVpnCore};
+
 // Placeholder types for external modules
 pub struct NetworkInterface {
     pub routes: Vec<super::interface::Route>,
@@ -13,9 +16,6 @@ impl NetworkInterface {
         self.routes.retain(|r| r.friend_number != friend_number);
     }
 }
-
-pub struct Tox;
-pub struct ToxVpnCore;
 
 /// Handles interactive user control commands (from stdin or unix client sockets)
 pub struct Control {
