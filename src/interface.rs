@@ -1,8 +1,15 @@
-use std::io::{self, Write};
+use std::io;
 use std::net::Ipv4Addr;
 use std::os::unix::io::RawFd;
 
 pub const TOX_PUBLIC_KEY_SIZE: usize = 32;
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct tun_pi {
+    pub flags: u16,
+    pub proto: u16,
+}
 
 /// Networking mode for the interface or peers
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,7 +95,7 @@ impl NetworkInterface {
         }
 
         // Fetch Tox public key to generate hardware MAC address
-        let mut pubkey = [0u8; TOX_PUBLIC_KEY_SIZE];
+        let pubkey = [0u8; TOX_PUBLIC_KEY_SIZE];
         // FFI placeholder: tox_self_get_public_key(self.my_tox, pubkey.as_mut_ptr());
 
         Self::pubkey_to_mac(&pubkey, &mut self.mymac);
@@ -222,7 +229,7 @@ impl NetworkInterface {
         buffer[0] = 200; // Tox-specific VPN packet prefix identifier
 
         let payload_size = if route.netmode == NetMode::Tun {
-            let pi_size = std::mem::size_of::<libc::tun_pi>();
+            let pi_size = std::mem::size_of::<tun_pi>();
             if readbuffer.len() < pi_size {
                 return;
             }
@@ -257,7 +264,7 @@ impl NetworkInterface {
             let mut write_data = data.to_vec();
             let mut size = write_data.len();
 
-            let pi_size = std::mem::size_of::<libc::tun_pi>();
+            let pi_size = std::mem::size_of::<tun_pi>();
             let eth_size = 14;
             if size >= pi_size + eth_size {
                 let mut stripped = Vec::with_capacity(size - eth_size);
