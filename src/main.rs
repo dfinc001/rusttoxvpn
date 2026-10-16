@@ -204,7 +204,7 @@ fn main() {
     unsafe {
         IS_SERVER_NODE = is_server;
         GLOBAL_ROUTES = Some(Arc::clone(&net_iface.routes));
-        TUN_FD = net_iface.fd();
+        TUN_FD = net_iface.fd;
         
         if is_server {
             SERVER_PASSWORD = final_password.clone();
