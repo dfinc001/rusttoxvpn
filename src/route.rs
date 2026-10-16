@@ -7,6 +7,21 @@ use std::io;
 #[cfg(target_os = "linux")]
 static mut NETLINK_SOCKET: RawFd = -1;
 
+#[cfg(target_os = "linux")]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct rtmsg {
+    pub rtm_family: u8,
+    pub rtm_dst_len: u8,
+    pub rtm_src_len: u8,
+    pub rtm_tos: u8,
+    pub rtm_table: u8,
+    pub rtm_protocol: u8,
+    pub rtm_scope: u8,
+    pub rtm_type: u8,
+    pub rtm_flags: u32,
+}
+
 /// Initializes the system routing environment and tables
 pub fn route_init() {
     #[cfg(target_os = "linux")]
@@ -30,7 +45,7 @@ pub fn route_init() {
 #[cfg(target_os = "linux")]
 struct NetlinkRouteRequest {
     nlh: libc::nlmsghdr,
-    rtm: libc::rtmsg,
+    rtm: rtmsg,
     buffer: [u8; 512],
     offset: usize,
 }
@@ -60,8 +75,8 @@ impl NetlinkRouteRequest {
 
         req.add_attr(libc::RTA_OIF, &ifindex.to_ne_bytes());
 
-        let payload_len = std::mem::size_of::<libc::rtmsg>() + req.offset;
-        req.nlh.nlmsg_len = libc::NLMSG_LENGTH(payload_len as u32) as u32;
+        let payload_len = std::mem::size_of::<rtmsg>() + req.offset;
+        req.nlh.nlmsg_len = libc::NLMSG_LENGTH(payload_len) as u32;
         req.nlh.nlmsg_flags = (libc::NLM_F_REQUEST | libc::NLM_F_CREATE) as u16;
         req.nlh.nlmsg_type = libc::RTM_NEWROUTE as u16;
 
@@ -103,7 +118,7 @@ impl NetlinkRouteRequest {
             ));
             msg_bytes.extend_from_slice(std::slice::from_raw_parts(
                 &self.rtm as *const _ as *const u8,
-                std::mem::size_of::<libc::rtmsg>(),
+                std::mem::size_of::<rtmsg>(),
             ));
             msg_bytes.extend_from_slice(&self.buffer[..self.offset]);
 
