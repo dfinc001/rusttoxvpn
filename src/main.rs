@@ -238,7 +238,7 @@ fn main() {
             println!(" Using Password  : {}", final_password);
 
             let target_bytes = match hex::decode(target_id_hex) {
-                Ok(bytes) if bytes.len() == 32 => bytes,
+                Ok(bytes) if bytes.len() == 38 => bytes,
                 _ => {
                     eprintln!("[-] Error: Invalid hex string or length for server ID (must be 32 bytes).");
                     std::process::exit(1);
