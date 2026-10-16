@@ -17,7 +17,6 @@ const WORD_LIST: &[&str] = &[
     "safe", "iron", "pine", "gold", "open", "firm", "apex"
 ];
 
-/// Generates a random 3-word hyphenated password if none is provided via CLI.
 fn generate_default_password() -> String {
     let mut rng = rand::thread_rng();
     let w1 = WORD_LIST.choose(&mut rng).unwrap();
@@ -26,13 +25,12 @@ fn generate_default_password() -> String {
     format!("{w1}-{w2}-{w3}")
 }
 
-// Global shared state for callbacks to access routing, passwords, and file descriptors safely
-static mut SERVER_PASSWORD: String = String::new();
+// Thread-safe globals for FFI callbacks
+static SERVER_PASSWORD: Mutex<String> = Mutex::new(String::new());
 static mut GLOBAL_ROUTES: Option<Arc<Mutex<Vec<interface::Route>>>> = None;
 static mut IS_SERVER_NODE: bool = false;
 static mut TUN_FD: RawFd = -1;
 
-/// C-compatible callback function triggered by libtoxcore when an incoming friend request arrives.
 unsafe extern "C" fn on_friend_request(
     tox: *mut std::ffi::c_void,
     public_key: *const u8,
@@ -43,7 +41,6 @@ unsafe extern "C" fn on_friend_request(
     let message_slice = std::slice::from_raw_parts(message, length);
     let request_payload = String::from_utf8_lossy(message_slice);
 
-    // Parse payload formatted as "password:client_ip"
     let parts: Vec<&str> = request_payload.split(':').collect();
     let client_password = parts.get(0).unwrap_or(&"");
     let client_ip = parts.get(1).unwrap_or(&"192.168.222.2");
@@ -57,7 +54,8 @@ unsafe extern "C" fn on_friend_request(
     println!("    - Client Tunnel IP  : {}", client_ip);
     println!("    - Provided Password : '{}'", client_password);
 
-    if *client_password == SERVER_PASSWORD {
+    let server_pwd = SERVER_PASSWORD.lock().unwrap();
+    if *client_password == *server_pwd {
         println!("    - Authentication    : SUCCESSFUL. Auto-accepting peer...");
         let mut err = 0;
         let friend_number = tox_core::tox_friend_add_norequest(tox, public_key, &mut err);
@@ -71,7 +69,6 @@ unsafe extern "C" fn on_friend_request(
     }
 }
 
-/// C-compatible callback function triggered when a friend's connection status changes.
 unsafe extern "C" fn on_connection_status(
     _tox: *mut std::ffi::c_void,
     friend_number: u32,
@@ -103,7 +100,6 @@ unsafe extern "C" fn on_connection_status(
             println!(" - Remote Tunnel IP    : {}", peer_ip);
             println!("============================================================\n");
 
-            // Populate point-to-point route table safely
             if let Some(ref routes_arc) = GLOBAL_ROUTES {
                 if let Ok(mut routes) = routes_arc.lock() {
                     if !routes.iter().any(|r| r.friend_number == friend_number as i32) {
@@ -124,7 +120,6 @@ unsafe extern "C" fn on_connection_status(
     }
 }
 
-/// C-compatible callback function triggered when a custom lossy packet arrives from a friend.
 unsafe extern "C" fn on_lossy_packet(
     _tox: *mut std::ffi::c_void,
     _friend_number: u32,
@@ -150,9 +145,7 @@ fn main() {
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
-            "--server" => {
-                is_server = true;
-            }
+            "--server" => { is_server = true; }
             "-p" => {
                 if i + 1 < args.len() {
                     password = Some(args[i + 1].clone());
@@ -172,7 +165,6 @@ fn main() {
 
     println!("Starting ToxVPN (Rust port)...");
 
-    // 1. Initialize real Tox Core instance via FFI
     let tox = match ToxInstance::new() {
         Ok(t) => t,
         Err(e) => {
@@ -182,42 +174,37 @@ fn main() {
     };
 
     let tox_id = tox.get_address_hex();
-
-    // 2. Bootstrap onto the public Tox DHT network using the bootstrap module
     bootstrap::bootstrap_tox(tox.ptr);
 
-    // 3. Resolve password (auto-generate if server and none provided)
     let final_password = if is_server {
         password.unwrap_or_else(|| generate_default_password())
     } else {
         password.unwrap_or_default()
     };
 
-    // 4. Initialize network interface
-    let mut net_iface = NetworkInterface::new(tox.ptr);
+    if is_server {
+        let mut pwd = SERVER_PASSWORD.lock().unwrap();
+        *pwd = final_password.clone();
+    }
 
-    // 5. Configure TUN interface with dynamic local IP based on mode
+    let mut net_iface = NetworkInterface::new(tox.ptr);
     let local_ip = if is_server { "192.168.222.1" } else { "192.168.222.2" };
     net_iface.configure(local_ip, NetMode::Tun);
 
-    // 6. Setup global state and callbacks safely
     unsafe {
         IS_SERVER_NODE = is_server;
         GLOBAL_ROUTES = Some(Arc::clone(&net_iface.routes));
         TUN_FD = net_iface.fd;
         
         if is_server {
-            SERVER_PASSWORD = final_password.clone();
             tox_core::tox_callback_friend_request(tox.ptr, Some(on_friend_request));
         }
         tox_core::tox_callback_friend_connection_status(tox.ptr, Some(on_connection_status));
         tox_core::tox_callback_friend_lossy_packet(tox.ptr, Some(on_lossy_packet));
     }
 
-    // 7. Print startup instructions & handle client-side friend connection request
     if is_server {
         let public_ip = bootstrap::get_public_ip();
-
         println!("\n============================================================");
         println!(" ToxVPN SERVER MODE ACTIVE");
         println!("============================================================");
@@ -238,8 +225,6 @@ fn main() {
             println!(" Using Password  : {}", final_password);
 
             let target_bytes = hex::decode(target_id_hex).expect("Invalid hex string for server ID");
-            
-            // Format request message as "password:client_ip" so server can inspect client config
             let request_message = format!("{}:{}", final_password, local_ip);
             let pass_bytes = request_message.as_bytes();
 
@@ -267,7 +252,6 @@ fn main() {
 
     println!("TUN interface configured successfully with IP {local_ip}. Running main loop...");
 
-    // 8. Main event loop keeping Tox core active and draining outbound channel packets safely
     loop {
         while let Ok(pkt) = net_iface.rx_channel.try_recv() {
             let mut err = 0;
