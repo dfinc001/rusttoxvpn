@@ -33,11 +33,9 @@ unsafe extern "C" fn on_friend_request(
     length: usize,
     _user_data: *mut std::ffi::c_void,
 ) {
-    // Reconstruct the message slice sent by the client (which contains our shared password)
     let message_slice = std::slice::from_raw_parts(message, length);
     let client_password = String::from_utf8_lossy(message_slice);
 
-    // Convert raw 32-byte public key to hex for clean logging
     let mut pubkey_array = [0u8; 32];
     std::ptr::copy_nonoverlapping(public_key, pubkey_array.as_mut_ptr(), 32);
     let pubkey_hex = hex::encode(pubkey_array);
@@ -45,7 +43,6 @@ unsafe extern "C" fn on_friend_request(
     println!("Received friend request from public key: {}", pubkey_hex);
     println!("Provided password: '{}'", client_password);
 
-    // Verify password against our expected server password
     if client_password == SERVER_PASSWORD {
         println!("Password verified! Auto-accepting connection...");
         let mut err = 0;
@@ -58,6 +55,34 @@ unsafe extern "C" fn on_friend_request(
     } else {
         eprintln!("Password mismatch! Rejecting connection request.");
     }
+}
+
+/// C-compatible callback function triggered when a friend's connection status changes.
+unsafe extern "C" fn on_connection_status(
+    _tox: *mut std::ffi::c_void,
+    friend_number: u32,
+    connection_status: u32,
+    _user_data: *mut std::ffi::c_void,
+) {
+    match connection_status {
+        0 => println!("[-] Friend {friend_number} went OFFLINE."),
+        1 => println!("[+] Friend {friend_number} connected via TCP!"),
+        2 => println!("[+] Friend {friend_number} connected via UDP!"),
+        _ => println!("[~] Friend {friend_number} connection status changed: {connection_status}"),
+    }
+}
+
+/// C-compatible callback function triggered when a custom lossy packet arrives from a friend.
+unsafe extern "C" fn on_lossy_packet(
+    _tox: *mut std::ffi::c_void,
+    friend_number: u32,
+    data: *const u8,
+    length: usize,
+    _user_data: *mut std::ffi::c_void,
+) {
+    let packet_slice = std::slice::from_raw_parts(data, length);
+    println!("Received {} bytes of VPN data from friend {friend_number}", packet_slice.len());
+    // TODO: Forward packet into kernel TUN device via network interface
 }
 
 fn main() {
@@ -111,19 +136,20 @@ fn main() {
         password.unwrap_or_default()
     };
 
-    // 3. If in server mode, register the friend request callback
-    if is_server {
-        unsafe {
+    // 3. Register callbacks on Tox instance
+    unsafe {
+        if is_server {
             SERVER_PASSWORD = final_password.clone();
             tox_core::tox_callback_friend_request(tox.ptr, Some(on_friend_request));
         }
+        tox_core::tox_callback_friend_connection_status(tox.ptr, Some(on_connection_status));
+        tox_core::tox_callback_friend_lossy_packet(tox.ptr, Some(on_lossy_packet));
     }
 
     // 4. Initialize network interface
     let mut net_iface = NetworkInterface::new(tox.ptr);
 
     // 5. Configure TUN interface with dynamic local IP based on mode
-    // Server gets 192.168.222.1, Client gets 192.168.222.2
     let local_ip = if is_server { "192.168.222.1" } else { "192.168.222.2" };
     net_iface.configure(local_ip, NetMode::Tun);
 
@@ -144,7 +170,6 @@ fn main() {
             println!("Connecting to Server ID: {}", target_id_hex);
             println!("Using Password         : {}", final_password);
 
-            // Decode 76-character hex string into 38-byte binary Tox address
             let target_bytes = hex::decode(target_id_hex).expect("Invalid hex string for server ID");
             let pass_bytes = final_password.as_bytes();
 
