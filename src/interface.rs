@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::io;
 use std::net::Ipv4Addr;
 use std::os::unix::io::RawFd;
