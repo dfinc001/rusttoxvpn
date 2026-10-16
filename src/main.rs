@@ -33,6 +33,6 @@ fn main() {
     // 5. Main iteration loop keeping Tox core alive
     loop {
         // We will add tox_iterate and interval sleeping here next!
-        std::thread::sleep(std::-duration::Duration::from_millis(50));
+        std::thread::sleep(std::time::Duration::from_millis(50));
     }
 }
