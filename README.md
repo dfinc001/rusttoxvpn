@@ -40,7 +40,7 @@ Make sure you have **Rust** and **Cargo** installed on a compatible Unix-based e
 
 1. Clone the repository:
    ```bash
-   git clone [https://github.com/dfinc001/rusttoxvpn.git](https://github.com/dfinc001/rusttoxvpn.git)
+   git clone https://github.com/dfinc001/rusttoxvpn.git
    cd rusttoxvpn
 
 
