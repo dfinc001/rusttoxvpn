@@ -20,6 +20,11 @@ fn main() {
     // Initialize system routing tables (Linux netlink / stubs)
     route::route_init();
 
+    // Initialize the virtual network interface (creates tox_master0 TUN device)
+    println!("Initializing virtual network interface...");
+    let mut interface = interface::NetworkInterface::new(std::ptr::null_mut());
+    interface.configure("10.0.0.1", interface::NetMode::Tun);
+
     // Set up graceful shutdown signal handler (Ctrl+C)
     let keep_running = Arc::new(AtomicBool::new(true));
     let r = keep_running.clone();
@@ -32,7 +37,7 @@ fn main() {
     }
 
     // Initialize ToxVPN core instance from toxvpn.rs
-    let mut _toxvpn = toxvpn::ToxVpnCore::default();
+    let mut toxvpn_core = toxvpn::ToxVpnCore::default();
 
     println!("ToxVPN is running. Press Ctrl+C to exit.");
 
