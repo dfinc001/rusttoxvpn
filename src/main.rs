@@ -267,9 +267,8 @@ fn main() {
 
     println!("TUN interface configured successfully with IP {local_ip}. Running main loop...");
 
-  // 8. Main event loop keeping Tox core active and responsive
+    // 8. Main event loop keeping Tox core active and draining outbound channel packets safely
     loop {
-        // Safely send any pending TUN packets on the main thread
         while let Ok(pkt) = net_iface.rx_channel.try_recv() {
             let mut err = 0;
             unsafe {
@@ -289,3 +288,4 @@ fn main() {
             std::thread::sleep(std::time::Duration::from_millis(interval as u64));
         }
     }
+}
