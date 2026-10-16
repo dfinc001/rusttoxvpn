@@ -1,5 +1,6 @@
 mod tox_core;
 mod interface;
+mod bootstrap;
 
 use interface::{NetworkInterface, NetMode};
 use tox_core::ToxInstance;
@@ -28,31 +29,6 @@ fn generate_default_password() -> String {
 static mut SERVER_PASSWORD: String = String::new();
 static mut GLOBAL_ROUTES: Option<Arc<Mutex<Vec<interface::Route>>>> = None;
 static mut IS_SERVER_NODE: bool = false;
-
-/// Bootstraps the Tox instance onto the global DHT network
-fn bootstrap_tox(tox_ptr: *mut std::ffi::c_void) {
-    let host = std::ffi::CString::new("node.tox.chat").unwrap();
-    let port = 33445;
-    let pubkey_hex = "1C5299444458BAA7627F839A2500D0090D4D2024EDF2E80562D5A64C0BA56952";
-    let pubkey_bytes = hex::decode(pubkey_hex).unwrap();
-
-    let mut err = 0;
-    let success = unsafe {
-        tox_core::tox_bootstrap(
-            tox_ptr,
-            host.as_ptr(),
-            port,
-            pubkey_bytes.as_ptr(),
-            &mut err,
-        )
-    };
-
-    if success {
-        println!("[+] Successfully initiated DHT bootstrap!");
-    } else {
-        eprintln!("[-] Failed to bootstrap DHT, error code: {err}");
-    }
-}
 
 /// C-compatible callback function triggered by libtoxcore when an incoming friend request arrives.
 unsafe extern "C" fn on_friend_request(
@@ -192,8 +168,8 @@ fn main() {
 
     let tox_id = tox.get_address_hex();
 
-    // 2. Bootstrap onto the public Tox DHT network
-    bootstrap_tox(tox.ptr);
+    // 2. Bootstrap onto the public Tox DHT network using the bootstrap module
+    bootstrap::bootstrap_tox(tox.ptr);
 
     // 3. Resolve password (auto-generate if server and none provided)
     let final_password = if is_server {
