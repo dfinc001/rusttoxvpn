@@ -1,5 +1,4 @@
 #![allow(dead_code)]
-use std::io;
 use std::net::Ipv4Addr;
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
@@ -38,7 +37,7 @@ pub struct Route {
 
 pub struct NetworkInterface {
     pub routes: Arc<Mutex<Vec<Route>>>,
-    fd: RawFd,
+    pub fd: RawFd, // Public so main.rs can access it for global callback file descriptor tracking
     my_tox: *mut std::ffi::c_void,
     interface_index: i32,
     mymac: [u8; 6],
