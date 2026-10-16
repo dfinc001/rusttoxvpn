@@ -152,7 +152,7 @@ impl NetworkInterface {
         });
     }
 
-  fn reader_loop(fd: RawFd) {
+ fn reader_loop(fd: RawFd) {
         let mut readbuffer = [0u8; 1500];
         loop {
             let size = unsafe {
@@ -160,7 +160,6 @@ impl NetworkInterface {
             };
             if size < 0 {
                 let err = io::Error::last_os_error();
-                // If the file descriptor is closed during shutdown, exit cleanly
                 if err.raw_os_error() == Some(libc::EBADF) {
                     break;
                 }
@@ -168,8 +167,24 @@ impl NetworkInterface {
                 break;
             } else if size > 0 {
                 let packet_len = size as usize;
-                println!("Intercepted packet from kernel: {} bytes", packet_len);
-                // TODO: Forward packet to peers via Tox network
+                
+                // A TUN packet with PI header has: 4 bytes (tun_pi) + IPv4 header (starts at offset 4)
+                // IPv4 destination address is at bytes 16-19 of the IP header (offset 4 + 16 = 20)
+                let pi_size = std::mem::size_of::<tun_pi>();
+                if packet_len >= pi_size + 20 {
+                    let dst_ip_bytes = &readbuffer[pi_size + 16..pi_size + 20];
+                    let dst_ip = Ipv4Addr::new(
+                        dst_ip_bytes[0],
+                        dst_ip_bytes[1],
+                        dst_ip_bytes[2],
+                        dst_ip_bytes[3],
+                    );
+                    println!("Intercepted packet: {} bytes -> Destination IP: {}", packet_len, dst_ip);
+                } else {
+                    println!("Intercepted packet: {} bytes (too short for IPv4)", packet_len);
+                }
+                
+                // TODO: Look up route using find_route(dst_ip) and forward via Tox!
             }
         }
     }
