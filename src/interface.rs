@@ -152,7 +152,7 @@ impl NetworkInterface {
         });
     }
 
-    fn reader_loop(fd: RawFd) {
+  fn reader_loop(fd: RawFd) {
         let mut readbuffer = [0u8; 1500];
         loop {
             let size = unsafe {
@@ -160,10 +160,16 @@ impl NetworkInterface {
             };
             if size < 0 {
                 let err = io::Error::last_os_error();
+                // If the file descriptor is closed during shutdown, exit cleanly
+                if err.raw_os_error() == Some(libc::EBADF) {
+                    break;
+                }
                 eprintln!("Unable to read from TUN interface: {err}");
                 break;
             } else if size > 0 {
-                // TODO: Handle incoming packet data
+                let packet_len = size as usize;
+                println!("Intercepted packet from kernel: {} bytes", packet_len);
+                // TODO: Forward packet to peers via Tox network
             }
         }
     }
