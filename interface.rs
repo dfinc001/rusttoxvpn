@@ -32,13 +32,132 @@ pub struct NetworkInterface {
 }
 
 impl NetworkInterface {
-    pub fn new(fd: RawFd, my_tox: *mut std::ffi::c_void, interface_index: i32) -> Self {
+    /// Opens the Linux TUN/TAP device driver (/dev/net/tun)
+    pub fn new(my_tox: *mut std::ffi::c_void) -> Self {
+        let fd = unsafe { libc::open(b"/dev/net/tun\0".as_ptr() as *const _, libc::O_RDWR) };
+        if fd < 0 {
+            eprintln!("Unable to open /dev/net/tun");
+        }
+
         Self {
             routes: Vec::new(),
             fd,
             my_tox,
-            interface_index,
+            interface_index: 0,
             mymac: [0u8; 6],
+        }
+    }
+
+    /// Configures the TUN/TAP interface, sets MAC addresses, MTU, IP addresses, and launches the reader thread
+    pub fn configure(&mut self, ip_in: &str, netmode: NetMode) {
+        if self.fd < 0 {
+            eprintln!("TUN file descriptor is invalid.");
+            return;
+        }
+
+        let mut ifr: libc::ifreq = unsafe { std::mem::zeroed() };
+        
+        ifr.ifr_ifru.ifru_flags = match netmode {
+            NetMode::Tap => libc::IFF_TAP as i16,
+            NetMode::Tun => libc::IFF_TUN as i16,
+        };
+
+        let name = b"tox_master0\0";
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                name.as_ptr() as *const i8,
+                ifr.ifr_name.as_mut_ptr(),
+                name.len(),
+            );
+        }
+
+        let err = unsafe { libc::ioctl(self.fd, libc::TUNSETIFF as _, &mut ifr) };
+        if err < 0 {
+            let errno = unsafe { *libc::__errno_location() };
+            if errno == libc::EPERM {
+                eprintln!("No permission to create TUN device (run as root)");
+                std::process::exit(-1);
+            } else if errno == libc::EINVAL {
+                eprintln!("EINVAL creating network device, is tun/tap in the right mode?");
+                std::process::exit(-1);
+            } else {
+                eprintln!("Error configuring TUNSETIFF: errno {errno}");
+                unsafe { libc::close(self.fd); }
+                std::process::exit(-1);
+            }
+        }
+
+        // Fetch Tox public key to generate hardware MAC address
+        let mut pubkey = [0u8; TOX_PUBLIC_KEY_SIZE];
+        // FFI placeholder: tox_self_get_public_key(self.my_tox, pubkey.as_mut_ptr());
+
+        Self::pubkey_to_mac(&pubkey, &mut self.mymac);
+
+        let tun_sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
+        if tun_sock < 0 {
+            eprintln!("Error while creating configuration socket");
+            return;
+        }
+
+        unsafe {
+            ifr.ifr_ifru.ifru_mtu = 1200;
+            libc::ioctl(tun_sock, libc::SIOCSIFMTU as _, &mut ifr);
+        }
+
+        let ip_addr: Ipv4Addr = match ip_in.parse() {
+            Ok(ip) => ip,
+            Err(_) => Ipv4Addr::new(10, 0, 0, 1),
+        };
+
+        unsafe {
+            let mut addr: libc::sockaddr_in = std::mem::zeroed();
+            addr.sin_family = libc::AF_INET as u16;
+            addr.sin_addr.s_addr = u32::from(ip_addr).to_be();
+            std::ptr::copy_nonoverlapping(
+                &addr as *const _ as *const u8,
+                &mut ifr.ifr_ifru.ifru_addr as *mut _ as *mut u8,
+                std::mem::size_of::<libc::sockaddr_in>(),
+            );
+            libc::ioctl(tun_sock, libc::SIOCSIFADDR as _, &mut ifr);
+
+            let dst_ip = Ipv4Addr::new(10, 123, 123, 123);
+            addr.sin_addr.s_addr = u32::from(dst_ip).to_be();
+            std::ptr::copy_nonoverlapping(
+                &addr as *const _ as *const u8,
+                &mut ifr.ifr_ifru.ifru_dstaddr as *mut _ as *mut u8,
+                std::mem::size_of::<libc::sockaddr_in>(),
+            );
+            libc::ioctl(tun_sock, libc::SIOCSIFDSTADDR as _, &mut ifr);
+
+            libc::ioctl(tun_sock, libc::SIOCGIFFLAGS as _, &mut ifr);
+            ifr.ifr_ifru.ifru_flags |= (libc::IFF_UP | libc::IFF_RUNNING) as i16;
+            libc::ioctl(tun_sock, libc::SIOCSIFFLAGS as _, &mut ifr);
+
+            libc::close(tun_sock);
+        }
+
+        let c_name = std::ffi::CString::new("tox_master0").unwrap();
+        self.interface_index = unsafe { libc::if_nametoindex(c_name.as_ptr()) as i32 };
+
+        let fd_clone = self.fd;
+        std::thread::spawn(move || {
+            Self::reader_loop(fd_clone);
+        });
+    }
+
+    fn reader_loop(fd: RawFd) {
+        let mut readbuffer = [0u8; 1500];
+        loop {
+            let size = unsafe {
+                libc::read(fd, readbuffer.as_mut_ptr() as *mut _, readbuffer.len())
+            };
+            if size < 0 {
+                let err = io::Error::last_os_error();
+                eprintln!("Unable to read from TUN interface: {err}");
+                break;
+            } else if size > 0 {
+                // TODO: Handle incoming packet data
+            }
         }
     }
 
@@ -103,13 +222,12 @@ impl NetworkInterface {
         buffer[0] = 200; // Tox-specific VPN packet prefix identifier
 
         let payload_size = if route.netmode == NetMode::Tun {
-            // Strip headers for TUN mode targets (keeping packet payload + PI)
             let pi_size = std::mem::size_of::<libc::tun_pi>();
             if readbuffer.len() < pi_size {
                 return;
             }
             buffer[1..1 + pi_size].copy_from_slice(&readbuffer[..pi_size]);
-            let offset = pi_size + 14; // tun_pi + ethernet_header size
+            let offset = pi_size + 14;
             if readbuffer.len() < offset {
                 return;
             }
@@ -117,13 +235,10 @@ impl NetworkInterface {
             buffer[1 + pi_size..1 + pi_size + remaining.len()].copy_from_slice(remaining);
             pi_size + remaining.len()
         } else {
-            // TAP mode forwards the full packet
             buffer[1..1 + readbuffer.len()].copy_from_slice(readbuffer);
             readbuffer.len()
         };
 
-        // FFI call placeholder to send via Tox:
-        // tox_friend_send_lossy_packet(self.my_tox, route.friend_number, buffer.as_ptr(), payload_size as u32 + 1, &mut error);
         let _ = (netmode, payload_size);
     }
 
@@ -142,7 +257,6 @@ impl NetworkInterface {
             let mut write_data = data.to_vec();
             let mut size = write_data.len();
 
-            // If TUN mode, strip the leading Ethernet header before writing to kernel
             let pi_size = std::mem::size_of::<libc::tun_pi>();
             let eth_size = 14;
             if size >= pi_size + eth_size {
