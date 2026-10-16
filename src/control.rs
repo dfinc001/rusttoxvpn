@@ -134,7 +134,7 @@ impl Control {
             }
             "bootstrap" => {
                 let _ = writeln!(out, "Triggering manual bootstrap...");
-                super::do_bootstrap(tox, toxvpn);
+                crate::toxvpn::do_bootstrap(tox, toxvpn);
             }
             "route" => {
                 if let Some(sub) = parts.next() {
