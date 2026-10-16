@@ -210,14 +210,16 @@ fn main() {
         tox_core::tox_callback_friend_connection_status(tox.ptr, Some(on_connection_status));
         tox_core::tox_callback_friend_lossy_packet(tox.ptr, Some(on_lossy_packet));
     }
-
-    // 7. Print startup instructions & handle client-side friend connection request
+// 7. Print startup instructions & handle client-side friend connection request
     if is_server {
+        let public_ip = bootstrap::get_public_ip();
+
         println!("\n============================================================");
         println!(" ToxVPN SERVER MODE ACTIVE");
         println!("============================================================");
-        println!(" Server Tox ID : {}", tox_id);
-        println!(" Shared Password: {}", final_password);
+        println!(" Server Public IP : {}", public_ip);
+        println!(" Server Tox ID    : {}", tox_id);
+        println!(" Shared Password  : {}", final_password);
         println!("------------------------------------------------------------");
         println!(" Run on client container:");
         println!("   cargo run -- -id {} -p {}", tox_id, final_password);
