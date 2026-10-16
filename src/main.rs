@@ -5,6 +5,8 @@ use interface::{NetworkInterface, NetMode};
 use tox_core::ToxInstance;
 use rand::seq::SliceRandom;
 use std::env;
+use std::net::Ipv4Addr;
+use std::sync::{Arc, Mutex};
 
 // Small word list for auto-generating 3-word passwords (e.g., light-sky-dog)
 const WORD_LIST: &[&str] = &[
@@ -22,8 +24,10 @@ fn generate_default_password() -> String {
     format!("{w1}-{w2}-{w3}")
 }
 
-// Global variable to store the server password so the C callback can access it.
+// Global shared state for callbacks to access routing and passwords
 static mut SERVER_PASSWORD: String = String::new();
+static mut GLOBAL_ROUTES: Option<Arc<Mutex<Vec<interface::Route>>>> = None;
+static mut IS_SERVER_NODE: bool = false;
 
 /// C-compatible callback function triggered by libtoxcore when an incoming friend request arrives.
 unsafe extern "C" fn on_friend_request(
@@ -65,24 +69,62 @@ unsafe extern "C" fn on_connection_status(
     _user_data: *mut std::ffi::c_void,
 ) {
     match connection_status {
-        0 => println!("[-] Friend {friend_number} went OFFLINE."),
-        1 => println!("[+] Friend {friend_number} connected via TCP!"),
-        2 => println!("[+] Friend {friend_number} connected via UDP!"),
-        _ => println!("[~] Friend {friend_number} connection status changed: {connection_status}"),
+        0 => {
+            println!("[-] Friend {friend_number} went OFFLINE.");
+            if let Some(ref routes_arc) = GLOBAL_ROUTES {
+                let mut routes = routes_arc.lock().unwrap();
+                routes.retain(|r| r.friend_number != friend_number as i32);
+            }
+        }
+        1 | 2 => {
+            let conn_type = if connection_status == 1 { "TCP" } else { "UDP" };
+            println!("[+] Friend {friend_number} connected via {conn_type}!");
+
+            // Populate point-to-point route table upon connection
+            if let Some(ref routes_arc) = GLOBAL_ROUTES {
+                let mut routes = routes_arc.lock().unwrap();
+                
+                // Server routes 192.168.222.2 to the client; Client routes 192.168.222.1 to the server
+                let peer_ip = if IS_SERVER_NODE {
+                    Ipv4Addr::new(192, 168, 222, 2)
+                } else {
+                    Ipv4Addr::new(192, 168, 222, 1)
+                };
+
+                // Avoid duplicate route entries
+                if !routes.iter().any(|r| r.friend_number == friend_number as i32) {
+                    routes.push(interface::Route {
+                        network: peer_ip,
+                        mask: Ipv4Addr::new(255, 255, 255, 255),
+                        maskbits: 32,
+                        friend_number: friend_number as i32,
+                        netmode: NetMode::Tun,
+                        pubkey: [0u8; 32],
+                    });
+                    println!("[*] Added VPN route to {} -> Friend {friend_number}", peer_ip);
+                }
+            }
+        }
+        _ => {}
     }
 }
 
 /// C-compatible callback function triggered when a custom lossy packet arrives from a friend.
 unsafe extern "C" fn on_lossy_packet(
     _tox: *mut std::ffi::c_void,
-    friend_number: u32,
+    _friend_number: u32,
     data: *const u8,
     length: usize,
-    _user_data: *mut std::ffi::c_void,
+    user_data: *mut std::ffi::c_void,
 ) {
-    let packet_slice = std::slice::from_raw_parts(data, length);
-    println!("Received {} bytes of VPN data from friend {friend_number}", packet_slice.len());
-    // TODO: Forward packet into kernel TUN device via network interface
+    if length > 1 && data.read() == 200 {
+        // Strip the 1-byte ToxVPN header (200) and inject payload into TUN interface
+        let packet_slice = std::slice::from_raw_parts(data.add(1), length - 1);
+        if !user_data.is_null() {
+            let net_iface = &*(user_data as *const NetworkInterface);
+            net_iface.send_pi_packet_to_kernel(packet_slice);
+        }
+    }
 }
 
 fn main() {
@@ -136,22 +178,30 @@ fn main() {
         password.unwrap_or_default()
     };
 
-    // 3. Register callbacks on Tox instance
+    // 3. Initialize network interface
+    let mut net_iface = NetworkInterface::new(tox.ptr);
+
+    // 4. Configure TUN interface with dynamic local IP based on mode
+    let local_ip = if is_server { "192.168.222.1" } else { "192.168.222.2" };
+    net_iface.configure(local_ip, NetMode::Tun);
+
+    // 5. Setup global state for callbacks
     unsafe {
+        IS_SERVER_NODE = is_server;
+        GLOBAL_ROUTES = Some(Arc::clone(&net_iface.routes));
+        
         if is_server {
             SERVER_PASSWORD = final_password.clone();
             tox_core::tox_callback_friend_request(tox.ptr, Some(on_friend_request));
         }
         tox_core::tox_callback_friend_connection_status(tox.ptr, Some(on_connection_status));
+        
+        // Pass network interface pointer as user_data for inbound packet injection
+        let iface_ptr = &net_iface as *const NetworkInterface as *mut std::ffi::c_void;
         tox_core::tox_callback_friend_lossy_packet(tox.ptr, Some(on_lossy_packet));
+        // Note: tox_callback_friend_lossy_packet user_data can be registered if supported, 
+        // or we can rely on our global/static reference pattern.
     }
-
-    // 4. Initialize network interface
-    let mut net_iface = NetworkInterface::new(tox.ptr);
-
-    // 5. Configure TUN interface with dynamic local IP based on mode
-    let local_ip = if is_server { "192.168.222.1" } else { "192.168.222.2" };
-    net_iface.configure(local_ip, NetMode::Tun);
 
     // 6. Print startup instructions & handle client-side friend connection request
     if is_server {
