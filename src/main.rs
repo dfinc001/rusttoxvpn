@@ -229,7 +229,7 @@ fn main() {
         println!(" Shared Password  : {}", final_password);
         println!("------------------------------------------------------------");
         println!(" Run on client container:");
-        println!("    cargo run -- -id {} -p {}", tox_id, final_password);
+        println!("    sudo toxvpn -id {} -p {}", tox_id, final_password);
         println!("============================================================\n");
     } else {
         println!("\n============================================================");
