@@ -65,16 +65,24 @@ impl NetworkInterface {
             NetMode::Tun => (libc::IFF_TUN | libc::IFF_NO_PI) as i16,
         };
 
-        let name = b"tox_master0\0";
+        // Use dynamic/unique interface name based on PID to prevent collisions
+        let iface_name = format!("tox_{}\0", std::process::id());
+        let name_bytes = iface_name.as_bytes();
+        if name_bytes.len() > libc::IFNAMSIZ {
+            eprintln!("Interface name too long.");
+            std::process::exit(-1);
+        }
+
         unsafe {
             std::ptr::copy_nonoverlapping(
-                name.as_ptr() as *const i8,
+                name_bytes.as_ptr() as *const i8,
                 ifr.ifr_name.as_mut_ptr(),
-                name.len(),
+                name_bytes.len(),
             );
         }
 
         let err = unsafe { libc::ioctl(self.fd, libc::TUNSETIFF as _, &mut ifr) };
+        let name_cstring = std::ffi::CString::new(&name_bytes[..name_bytes.len() - 1]).unwrap();
         if err < 0 {
             eprintln!("Error configuring TUNSETIFF");
             std::process::exit(-1);
@@ -119,8 +127,7 @@ impl NetworkInterface {
             libc::close(tun_sock);
         }
 
-        let c_name = std::ffi::CString::new("tox_master0").unwrap();
-        self.interface_index = unsafe { libc::if_nametoindex(c_name.as_ptr()) as i32 };
+        self.interface_index = unsafe { libc::if_nametoindex(name_cstring.as_ptr()) as i32 };
 
         let fd_clone = self.fd;
         let routes_clone = Arc::clone(&self.routes);
@@ -139,8 +146,15 @@ impl NetworkInterface {
             };
             if size < 0 {
                 break;
-            } else if size > 20 {
+            } else if size >= 20 {
                 let packet_len = size as usize;
+                
+                // Validate IPv4 version header (top nibble of byte 0 should be 4)
+                let version = readbuffer[0] >> 4;
+                if version != 4 {
+                    continue;
+                }
+
                 let dst_ip_bytes = &readbuffer[16..20];
                 let dst_ip = Ipv4Addr::new(
                     dst_ip_bytes[0],
@@ -150,7 +164,10 @@ impl NetworkInterface {
                 );
 
                 let matched_route = {
-                    let lock = routes.lock().unwrap();
+                    let lock = match routes.lock() {
+                        Ok(l) => l,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
                     lock.iter().find(|r| {
                         let net_bits = u32::from(r.network);
                         let mask_bits = u32::from(r.mask);
