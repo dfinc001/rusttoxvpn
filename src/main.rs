@@ -183,6 +183,9 @@ fn main() {
         Ok(t) => t,
         Err(e) => {
             eprintln!("Failed to initialize Tox instance: {e}");
+            eprintln!("This usually happens because the 'toxcore' library is missing from your system.");
+            eprintln!("Toxcore is the essential engine that handles the networking, encryption, and peer-to-peer connections that make this VPN work.");
+            eprintln!("Please install toxcore for your distribution. For example, on Ubuntu or Debian, you can use: sudo apt install libtoxcore2");
             std::process::exit(1);
         }
     };
