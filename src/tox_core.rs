@@ -99,38 +99,7 @@ pub type ToxFriendLossyPacketCb = Option<
     ),
 >;
 
-// ============================================================================
-// Tox Options Configuration Structure
-// ============================================================================
-// `#[repr(C)]` guarantees that the memory layout matches the C library's expected
-// struct layout, ensuring correct alignment and field offsets across the FFI boundary.
-#[repr(C)]
-pub struct ToxOptions {
-    pub ipv6_enabled: bool,
-    pub udp_enabled: bool,
-    pub proxy_type: u8,
-    pub proxy_host: *const i8,
-    pub proxy_port: u16,
-    pub start_port: u16,
-    pub end_port: u16,
-    pub tcp_port: u16,
-    pub savedata_type: u8,
-    pub savedata_data: *const u8,
-    pub savedata_length: usize,
-}
 
-impl Default for ToxOptions {
-    fn default() -> Self {
-        unsafe {
-            // Zero-initialize the struct memory safely, then enable required defaults
-            let mut opts: ToxOptions = std::mem::zeroed();
-            opts.ipv6_enabled = true;
-            opts.udp_enabled = true;
-            opts.tcp_port = 33445; // Enable TCP listener fallback for container NAT traversal
-            opts
-        }
-    }
-}
 
 // ============================================================================
 // Safe Rust Wrapper for Tox Instance (RAII Pattern)
