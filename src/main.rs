@@ -13,7 +13,7 @@ use std::sync::OnceLock;
 
 // Small word list for auto-generating 3-word passwords
 const WORD_LIST: &[&str] = &[
-    "light", "sky", "dog", "fast", "blue", "run", "red", "car", 
+    "light", "sky", "dog", "fast", "blue", "run", "red", "car",
     "jump", "cold", "wind", "storm", "dark", "moon", "night",
     "safe", "iron", "pine", "gold", "open", "firm", "apex"
 ];
@@ -151,7 +151,7 @@ unsafe extern "C" fn on_lossy_packet(
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    
+
     let mut is_server = false;
     let mut password: Option<String> = None;
     let mut client_target_id: Option<String> = None;
@@ -290,7 +290,7 @@ fn main() {
         }
 
         unsafe {
-            tox_core::tox_iterate(tox.ptr);
+            tox_core::tox_iterate(tox.ptr, std::ptr::null_mut());
             let interval = tox_core::tox_iteration_interval(tox.ptr);
             std::thread::sleep(std::time::Duration::from_millis(interval as u64));
         }
