@@ -127,7 +127,7 @@ fn main() {
     bootstrap::bootstrap_tox(tox.ptr);
 
     // Set callbacks
-    let session_ptr = Arc::into_raw(Arc::clone(&session)) as *mut std::ffi::c_void;
+    let session_ptr = Box::into_raw(Box::new(Arc::clone(&session))) as *mut std::ffi::c_void;
     unsafe {
         tox_core::tox_callback_friend_connection_status(tox.ptr, Some(on_connection_status));
         tox_core::tox_callback_friend_lossy_packet(tox.ptr, Some(on_lossy_packet));
@@ -188,7 +188,7 @@ fn main() {
         }
 
         unsafe {
-            tox_core::tox_iterate(tox.ptr);
+            tox_core::tox_iterate(tox.ptr, session_ptr);
             let interval = tox_core::tox_iteration_interval(tox.ptr);
             std::thread::sleep(Duration::from_millis(interval as u64));
         }
