@@ -20,7 +20,7 @@ unsafe extern "C" fn on_lossy_packet(
 ) {
     if length > 1 && !data.is_null() && *data == 200 {
         let packet_slice = std::slice::from_raw_parts(data.add(1), length - 1);
-        
+
         // Grab the Wintun session pointer passed via user data
         let session = &*(user_data as *const Arc<wintun::Session>);
         if let Ok(mut packet) = session.allocate_send_packet(packet_slice.len() as u16) {
@@ -164,21 +164,18 @@ fn main() {
 
     println!("============================================================\n");
 
-    // 5. Background thread: Read from Windows Wintun -> Send via Tox Lossy Packet to Server
-    let session_reader = Arc::clone(&session);
-    let tox_ptr = tox.ptr;
-    std::thread::spawn(move || {
+    // 5. Poll Wintun and process Tox events on the same thread
+    loop {
         loop {
-            match session_reader.receive_blocking() {
-                Ok(packet) => {
-                    let bytes = packet.bytes();
-                    let mut data = vec![200]; // Protocol header matching your Linux server expectation
-                    data.extend_from_slice(bytes);
+            match session.try_receive() {
+                Ok(Some(packet)) => {
+                    let mut data = vec![200];
+                    data.extend_from_slice(packet.bytes());
 
                     let mut send_err = 0;
                     unsafe {
                         tox_core::tox_friend_send_lossy_packet(
-                            tox_ptr,
+                            tox.ptr,
                             friend_number,
                             data.as_ptr(),
                             data.len(),
@@ -186,13 +183,10 @@ fn main() {
                         );
                     }
                 }
-                Err(_) => break,
+                Ok(None) | Err(_) => break,
             }
         }
-    });
 
-    // 6. Main Tox Event Loop
-    loop {
         unsafe {
             tox_core::tox_iterate(tox.ptr);
             let interval = tox_core::tox_iteration_interval(tox.ptr);
