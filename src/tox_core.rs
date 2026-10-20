@@ -18,7 +18,8 @@ extern "C" {
     pub fn tox_kill(tox: *mut c_void);
     pub fn tox_self_get_address(tox: *const c_void, address: *mut u8);
     pub fn tox_iteration_interval(tox: *const c_void) -> u32;
-    pub fn tox_iterate(tox: *mut c_void);
+    pub fn tox_iterate(tox: *mut c_void, user_data: *mut c_void);
+    //pub fn tox_iterate(tox: *mut c_void);
 
     // DHT Bootstrap function
     pub fn tox_bootstrap(
@@ -135,7 +136,7 @@ impl ToxInstance {
         Ok(Self { ptr })
     }
 
-    /// Retrieves the local node's real 38-byte Tox address and converts it 
+    /// Retrieves the local node's real 38-byte Tox address and converts it
     /// into a 76-character hexadecimal string representation (the Tox ID).
     pub fn get_address_hex(&self) -> String {
         let mut address = [0u8; 38]; // TOX_ADDRESS_SIZE is exactly 38 bytes
